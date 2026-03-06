@@ -17,13 +17,20 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-
 import logging
+import json
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+
+import card as c
+from pony.orm import db_session
 
 from game import Game
 from player import Player
+from config import STALE_GAME_UNLOAD_SECONDS, STALE_GAME_SCAN_EVERY_SECONDS
 from errors import (AlreadyJoinedError, LobbyClosedError, NoGameInChatError,
                     NotEnoughPlayersError)
+from persisted_state import PersistedChatState
 
 class GameManager(object):
     """ Manages all running games by using a confusing amount of dicts """
@@ -33,14 +40,229 @@ class GameManager(object):
         self.userid_players = dict()
         self.userid_current = dict()
         self.remind_dict = dict()
+        self._last_unload_scan = datetime.now()
 
         self.logger = logging.getLogger(__name__)
+
+    def _chat_stub(self, chat_id, title=None, chat_type='group'):
+        return SimpleNamespace(id=chat_id, title=title, type=chat_type)
+
+    def _user_stub(self, user_id, first_name=None, username=None):
+        return SimpleNamespace(id=user_id, first_name=first_name or str(user_id), username=username)
+
+    def _serialize_card(self, card):
+        return str(card) if card else None
+
+    def _deserialize_card(self, value):
+        return c.from_str(value) if value else None
+
+    def _serialize_user(self, user):
+        if user is None:
+            return None
+        return {
+            'id': user.id,
+            'first_name': getattr(user, 'first_name', str(user.id)),
+            'username': getattr(user, 'username', None)
+        }
+
+    def _deserialize_user(self, data):
+        if data is None:
+            return None
+        return self._user_stub(data['id'], data.get('first_name'), data.get('username'))
+
+    def _serialize_game(self, game):
+        players = game.players
+        current_player_idx = players.index(game.current_player) if players and game.current_player in players else 0
+        return {
+            'chat': {
+                'id': game.chat.id,
+                'title': getattr(game.chat, 'title', None),
+                'type': getattr(game.chat, 'type', 'group')
+            },
+            'started': game.started,
+            'reversed': game.reversed,
+            'choosing_color': game.choosing_color,
+            'draw_counter': game.draw_counter,
+            'players_won': game.players_won,
+            'mode': game.mode,
+            'open': game.open,
+            'translate': game.translate,
+            'owner': list(game.owner or []),
+            'starter': self._serialize_user(game.starter),
+            'last_card': self._serialize_card(game.last_card),
+            'deck_cards': [self._serialize_card(card) for card in game.deck.cards],
+            'deck_graveyard': [self._serialize_card(card) for card in game.deck.graveyard],
+            'players': [
+                {
+                    'user': self._serialize_user(player.user),
+                    'cards': [self._serialize_card(card) for card in player.cards],
+                    'bluffing': player.bluffing,
+                    'drew': player.drew,
+                    'anti_cheat': player.anti_cheat,
+                    'turn_started': player.turn_started.isoformat(),
+                    'waiting_time': player.waiting_time
+                }
+                for player in players
+            ],
+            'current_player_idx': current_player_idx,
+            'last_activity': game.last_activity.isoformat() if getattr(game, 'last_activity', None) else datetime.now().isoformat()
+        }
+
+    def _deserialize_game(self, data):
+        chat_data = data['chat']
+        game = Game(self._chat_stub(chat_data['id'], chat_data.get('title'), chat_data.get('type', 'group')))
+        game.started = data.get('started', False)
+        game.reversed = data.get('reversed', False)
+        game.choosing_color = data.get('choosing_color', False)
+        game.draw_counter = data.get('draw_counter', 0)
+        game.players_won = data.get('players_won', 0)
+        game.mode = data.get('mode')
+        game.open = data.get('open', True)
+        game.translate = data.get('translate', False)
+        game.owner = set(data.get('owner') or [])
+        game.starter = self._deserialize_user(data.get('starter'))
+        game.last_card = self._deserialize_card(data.get('last_card'))
+        game.deck.cards = [self._deserialize_card(card) for card in data.get('deck_cards', [])]
+        game.deck.graveyard = [self._deserialize_card(card) for card in data.get('deck_graveyard', [])]
+        game.last_activity = datetime.fromisoformat(data.get('last_activity', datetime.now().isoformat()))
+        game.job = None
+
+        for player_data in data.get('players', []):
+            player = Player(game, self._deserialize_user(player_data['user']))
+            player.cards = [self._deserialize_card(card) for card in player_data.get('cards', [])]
+            player.bluffing = player_data.get('bluffing', False)
+            player.drew = player_data.get('drew', False)
+            player.anti_cheat = player_data.get('anti_cheat', 0)
+            player.turn_started = datetime.fromisoformat(player_data.get('turn_started', datetime.now().isoformat()))
+            player.waiting_time = player_data.get('waiting_time', player.waiting_time)
+
+        if game.players:
+            idx = data.get('current_player_idx', 0)
+            if idx < 0 or idx >= len(game.players):
+                idx = 0
+            game.current_player = game.players[idx]
+        return game
+
+    @db_session
+    def _persist_chat(self, chat_id):
+        games = self.chatid_games.get(chat_id, [])
+        row = PersistedChatState.get(chat_id=chat_id)
+        if games:
+            payload = json.dumps([self._serialize_game(game) for game in games])
+            if row:
+                row.payload = payload
+                row.updated_at = datetime.now()
+            else:
+                PersistedChatState(chat_id=chat_id, payload=payload, updated_at=datetime.now())
+        elif row:
+            row.delete()
+
+    def persist_game(self, game):
+        game.touch()
+        self._persist_chat(game.chat.id)
+
+    @db_session
+    def _load_chat_from_storage(self, chat_id):
+        row = PersistedChatState.get(chat_id=chat_id)
+        if not row:
+            return []
+        data = json.loads(row.payload)
+        return [self._deserialize_game(game_data) for game_data in data]
+
+    def _index_loaded_game(self, game):
+        for player in game.players:
+            self.userid_players.setdefault(player.user.id, []).append(player)
+            if player.user.id not in self.userid_current:
+                self.userid_current[player.user.id] = player
+            elif game.current_player and self.userid_current[player.user.id].game.chat.id == game.chat.id:
+                self.userid_current[player.user.id] = player
+
+    def _deindex_game(self, game):
+        for player in game.players:
+            user_games = self.userid_players.get(player.user.id, [])
+            if player in user_games:
+                user_games.remove(player)
+            if user_games:
+                if self.userid_current.get(player.user.id) is player:
+                    self.userid_current[player.user.id] = user_games[0]
+            else:
+                self.userid_players.pop(player.user.id, None)
+                self.userid_current.pop(player.user.id, None)
+
+    def load_persisted_games(self):
+        self.chatid_games = {}
+        self.userid_players = {}
+        self.userid_current = {}
+
+        with db_session:
+            rows = PersistedChatState.select()[:]
+
+        for row in rows:
+            games = [self._deserialize_game(game_data) for game_data in json.loads(row.payload)]
+            if games:
+                self.chatid_games[row.chat_id] = games
+                for game in games:
+                    self._index_loaded_game(game)
+
+    def ensure_chat_loaded(self, chat):
+        if chat.id in self.chatid_games:
+            return
+        games = self._load_chat_from_storage(chat.id)
+        if not games:
+            return
+        for game in games:
+            game.chat = chat if game.chat.id == chat.id else game.chat
+            self._index_loaded_game(game)
+        self.chatid_games[chat.id] = games
+
+    def ensure_user_loaded(self, user_id):
+        if user_id in self.userid_players:
+            return
+        with db_session:
+            rows = PersistedChatState.select()[:]
+
+        for row in rows:
+            if row.chat_id in self.chatid_games:
+                continue
+            games_data = json.loads(row.payload)
+            if not any(any(player['user']['id'] == user_id for player in game_data.get('players', [])) for game_data in games_data):
+                continue
+            games = [self._deserialize_game(game_data) for game_data in games_data]
+            self.chatid_games[row.chat_id] = games
+            for game in games:
+                self._index_loaded_game(game)
+
+    def _maybe_unload_stale_games(self, exclude_chat_id=None):
+        if STALE_GAME_UNLOAD_SECONDS <= 0:
+            return
+
+        now = datetime.now()
+        if now - self._last_unload_scan < timedelta(seconds=STALE_GAME_SCAN_EVERY_SECONDS):
+            return
+
+        self._last_unload_scan = now
+        stale_chat_ids = []
+        for chat_id, games in self.chatid_games.items():
+            if chat_id == exclude_chat_id:
+                continue
+            if not games:
+                continue
+            newest = max(getattr(game, 'last_activity', now) for game in games)
+            if now - newest > timedelta(seconds=STALE_GAME_UNLOAD_SECONDS):
+                stale_chat_ids.append(chat_id)
+
+        for chat_id in stale_chat_ids:
+            for game in self.chatid_games.get(chat_id, []):
+                self._deindex_game(game)
+            del self.chatid_games[chat_id]
 
     def new_game(self, chat):
         """
         Create a new game in this chat
         """
         chat_id = chat.id
+        self.ensure_chat_loaded(chat)
+        self._maybe_unload_stale_games(exclude_chat_id=chat.id)
 
         self.logger.debug("Creating new game in chat " + str(chat_id))
         game = Game(chat)
@@ -54,10 +276,13 @@ class GameManager(object):
                 self.chatid_games[chat_id].remove(g)
 
         self.chatid_games[chat_id].append(game)
+        self._persist_chat(chat_id)
         return game
 
     def join_game(self, user, chat):
         """ Create a player from the Telegram user and add it to the game """
+        self.ensure_chat_loaded(chat)
+        self._maybe_unload_stale_games(exclude_chat_id=chat.id)
         self.logger.info("Joining game with id " + str(chat.id))
 
         try:
@@ -97,15 +322,21 @@ class GameManager(object):
 
         players.append(player)
         self.userid_current[user.id] = player
+        game.touch()
+        self._persist_chat(chat.id)
 
     def leave_game(self, user, chat):
         """ Remove a player from its current game """
+        self.ensure_chat_loaded(chat)
+        self._maybe_unload_stale_games(exclude_chat_id=chat.id)
 
         player = self.player_for_user_in_chat(user, chat)
         players = self.userid_players.get(user.id, list())
 
         if not player:
-            games = self.chatid_games[chat.id]
+            games = self.chatid_games.get(chat.id, list())
+            if not games:
+                raise NoGameInChatError
             for g in games:
                 for p in g.players:
                     if p.user.id == user.id:
@@ -113,6 +344,8 @@ class GameManager(object):
                             g.turn()
 
                         p.leave()
+                        g.touch()
+                        self._persist_chat(chat.id)
                         return
 
             raise NoGameInChatError
@@ -127,6 +360,7 @@ class GameManager(object):
 
         player.leave()
         players.remove(player)
+        game.touch()
 
         # If this is the selected game, switch to another
         if self.userid_current.get(user.id, None) is player:
@@ -135,14 +369,16 @@ class GameManager(object):
             else:
                 del self.userid_current[user.id]
                 del self.userid_players[user.id]
+        self._persist_chat(chat.id)
 
     def end_game(self, chat, user):
         """
         End a game
         """
+        self.ensure_chat_loaded(chat)
+        self._maybe_unload_stale_games(exclude_chat_id=chat.id)
 
         self.logger.info("Game in chat " + str(chat.id) + " ended")
-        send_promotion_async(chat, chance=0.15)
 
         # Find the correct game instance to end
         player = self.player_for_user_in_chat(user, chat)
@@ -181,10 +417,17 @@ class GameManager(object):
         self.chatid_games[chat.id].remove(game)
         if not self.chatid_games[chat.id]:
             del self.chatid_games[chat.id]
+        self._persist_chat(chat.id)
 
     def player_for_user_in_chat(self, user, chat):
+        if user is None or chat is None:
+            return None
+        self.ensure_chat_loaded(chat)
+        self.ensure_user_loaded(user.id)
+        self._maybe_unload_stale_games(exclude_chat_id=chat.id)
         players = self.userid_players.get(user.id, list())
         for player in players:
             if player.game.chat.id == chat.id:
+                player.game.touch()
                 return player
         return None

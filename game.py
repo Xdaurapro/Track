@@ -27,26 +27,29 @@ import card as c
 
 class Game(object):
     """ This class represents a game of UNO """
-    current_player = None
-    reversed = False
-    choosing_color = False
-    started = False
-    draw_counter = 0
-    players_won = 0
-    starter = None
-    mode = DEFAULT_GAMEMODE
-    job = None
-    owner = ADMIN_LIST
-    open = OPEN_LOBBY
-    translate = ENABLE_TRANSLATIONS
 
     def __init__(self, chat):
         self.chat = chat
         self.last_card = None
-
         self.deck = Deck()
+        self.current_player = None
+        self.reversed = False
+        self.choosing_color = False
+        self.started = False
+        self.draw_counter = 0
+        self.players_won = 0
+        self.starter = None
+        self.mode = DEFAULT_GAMEMODE
+        self.job = None
+        self.owner = set(ADMIN_LIST or [])
+        self.open = OPEN_LOBBY
+        self.translate = ENABLE_TRANSLATIONS
+        self.last_activity = datetime.now()
 
         self.logger = logging.getLogger(__name__)
+
+    def touch(self):
+        self.last_activity = datetime.now()
 
     @property
     def players(self):
@@ -64,6 +67,7 @@ class Game(object):
         return players
 
     def start(self):
+        self.touch()
         if self.mode == None or self.mode != "wild":
             self.deck._fill_classic_()
         else:
@@ -73,14 +77,17 @@ class Game(object):
         self.started = True
 
     def set_mode(self, mode):
+        self.touch()
         self.mode = mode
 
     def reverse(self):
         """Reverses the direction of game"""
+        self.touch()
         self.reversed = not self.reversed
 
     def turn(self):
         """Marks the turn as over and change the current player"""
+        self.touch()
         self.logger.debug("Next Player")
         self.current_player = self.current_player.next
         self.current_player.drew = False
@@ -107,6 +114,7 @@ class Game(object):
         Should be called only from Player.play or on game start to play the
         first card
         """
+        self.touch()
         self.deck.dismiss(self.last_card)
         self.last_card = card
 
@@ -135,5 +143,6 @@ class Game(object):
 
     def choose_color(self, color):
         """Carries out the color choosing and turns the game"""
+        self.touch()
         self.last_card.color = color
         self.turn()

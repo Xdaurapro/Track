@@ -56,6 +56,7 @@ def do_skip(bot, player, job_queue=None):
         logger.info("{player} was skipped! "
                     .format(player=display_name(player.user)))
         game.turn()
+        gm.persist_game(game)
         if job_queue:
             start_player_countdown(bot, game, job_queue)
 
@@ -70,6 +71,7 @@ def do_skip(bot, player, job_queue=None):
                                name2=display_name(next_player.user)))
             logger.info("{player} was skipped! "
                     .format(player=display_name(player.user)))
+            gm.persist_game(game)
             if job_queue:
                 start_player_countdown(bot, game, job_queue)
 
@@ -130,6 +132,9 @@ def do_play_card(bot, player, result_id):
 
             gm.end_game(chat, user)
 
+    if game in gm.chatid_games.get(chat.id, []):
+        gm.persist_game(game)
+
 
 def do_draw(bot, player):
     """Does the drawing"""
@@ -147,6 +152,7 @@ def do_draw(bot, player):
         game.last_card.special == c.DRAW_FOUR) and \
             draw_counter_before > 0:
         game.turn()
+    gm.persist_game(game)
 
 
 def do_call_bluff(bot, player):
@@ -182,6 +188,7 @@ def do_call_bluff(bot, player):
                                multi=game.translate))
 
     game.turn()
+    gm.persist_game(game)
 
 
 def start_player_countdown(bot, game, job_queue):

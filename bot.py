@@ -88,8 +88,9 @@ def new_game(update: Update, context: CallbackContext):
 
         game = gm.new_game(update.message.chat)
         game.starter = update.message.from_user
-        game.owner.append(update.message.from_user.id)
+        game.owner.add(update.message.from_user.id)
         game.mode = DEFAULT_GAMEMODE
+        gm.persist_game(game)
         send_async(context.bot, chat_id,
                    text=_("Created a new game! Join the game with /join "
                           "and start the game with /start"))
@@ -100,6 +101,7 @@ def kill_game(update: Update, context: CallbackContext):
     """Handler for the /kill command"""
     chat = update.message.chat
     user = update.message.from_user
+    gm.ensure_chat_loaded(chat)
     games = gm.chatid_games.get(chat.id)
 
     if update.message.chat.type == 'private':
@@ -224,6 +226,7 @@ def kick_player(update: Update, context: CallbackContext):
 
     chat = update.message.chat
     user = update.message.from_user
+    gm.ensure_chat_loaded(chat)
 
     try:
         game = gm.chatid_games[chat.id][-1]
@@ -289,6 +292,7 @@ def select_game(update: Update, context: CallbackContext):
 
     chat_id = int(update.callback_query.data)
     user_id = update.callback_query.from_user.id
+    gm.ensure_user_loaded(user_id)
     players = gm.userid_players[user_id]
     for player in players:
         if player.game.chat.id == chat_id:
@@ -352,6 +356,7 @@ def start_game(update: Update, context: CallbackContext):
 
     if update.message.chat.type != 'private':
         chat = update.message.chat
+        gm.ensure_chat_loaded(chat)
 
         try:
             game = gm.chatid_games[chat.id][-1]
@@ -375,6 +380,7 @@ def start_game(update: Update, context: CallbackContext):
 
             for player in game.players:
                 player.draw_first_hand()
+            gm.persist_game(game)
             choice = [[InlineKeyboardButton(text=_("Make your choice!"), switch_inline_query_current_chat='')]]
             first_message = (
                 __("First player: {name}\n"
@@ -399,6 +405,7 @@ def start_game(update: Update, context: CallbackContext):
             start_player_countdown(context.bot, game, context.job_queue)
 
     elif len(context.args) and context.args[0] == 'select':
+        gm.ensure_user_loaded(update.message.from_user.id)
         players = gm.userid_players[update.message.from_user.id]
 
         groups = list()
@@ -426,6 +433,7 @@ def close_game(update: Update, context: CallbackContext):
     """Handler for the /close command"""
     chat = update.message.chat
     user = update.message.from_user
+    gm.ensure_chat_loaded(chat)
     games = gm.chatid_games.get(chat.id)
 
     if not games:
@@ -437,6 +445,7 @@ def close_game(update: Update, context: CallbackContext):
 
     if user.id in game.owner:
         game.open = False
+        gm.persist_game(game)
         send_async(context.bot, chat.id, text=_("Closed the lobby. "
                                         "No more players can join this game."))
         return
@@ -454,6 +463,7 @@ def open_game(update: Update, context: CallbackContext):
     """Handler for the /open command"""
     chat = update.message.chat
     user = update.message.from_user
+    gm.ensure_chat_loaded(chat)
     games = gm.chatid_games.get(chat.id)
 
     if not games:
@@ -465,6 +475,7 @@ def open_game(update: Update, context: CallbackContext):
 
     if user.id in game.owner:
         game.open = True
+        gm.persist_game(game)
         send_async(context.bot, chat.id, text=_("Opened the lobby. "
                                         "New players may /join the game."))
         return
@@ -481,6 +492,7 @@ def enable_translations(update: Update, context: CallbackContext):
     """Handler for the /enable_translations command"""
     chat = update.message.chat
     user = update.message.from_user
+    gm.ensure_chat_loaded(chat)
     games = gm.chatid_games.get(chat.id)
 
     if not games:
@@ -492,6 +504,7 @@ def enable_translations(update: Update, context: CallbackContext):
 
     if user.id in game.owner:
         game.translate = True
+        gm.persist_game(game)
         send_async(context.bot, chat.id, text=_("Enabled multi-translations. "
                                         "Disable with /disable_translations"))
         return
@@ -509,6 +522,7 @@ def disable_translations(update: Update, context: CallbackContext):
     """Handler for the /disable_translations command"""
     chat = update.message.chat
     user = update.message.from_user
+    gm.ensure_chat_loaded(chat)
     games = gm.chatid_games.get(chat.id)
 
     if not games:
@@ -520,6 +534,7 @@ def disable_translations(update: Update, context: CallbackContext):
 
     if user.id in game.owner:
         game.translate = False
+        gm.persist_game(game)
         send_async(context.bot, chat.id, text=_("Disabled multi-translations. "
                                         "Enable them again with "
                                         "/enable_translations"))
@@ -580,6 +595,7 @@ def reply_to_query(update: Update, context: CallbackContext):
     try:
         user = update.inline_query.from_user
         user_id = user.id
+        gm.ensure_user_loaded(user_id)
         players = gm.userid_players[user_id]
         player = gm.userid_current[user_id]
         game = player.game
@@ -650,6 +666,7 @@ def process_result(update: Update, context: CallbackContext):
     """
     try:
         user = update.chosen_inline_result.from_user
+        gm.ensure_user_loaded(user.id)
         player = gm.userid_current[user.id]
         game = player.game
         result_id = update.chosen_inline_result.result_id
@@ -669,6 +686,7 @@ def process_result(update: Update, context: CallbackContext):
         # First 5 characters are 'mode_', the rest is the gamemode.
         mode = result_id[5:]
         game.set_mode(mode)
+        gm.persist_game(game)
         logger.info("Gamemode changed to {mode}".format(mode = mode))
         send_async(context.bot, chat.id, text=__("Gamemode changed to {mode}".format(mode = mode)))
         return
@@ -694,6 +712,7 @@ def process_result(update: Update, context: CallbackContext):
         do_play_card(context.bot, player, result_id)
 
     if game_is_running(game):
+        gm.persist_game(game)
         nextplayer_message = (
             __("Next player: {name}", multi=game.translate)
             .format(name=display_name(game.current_player.user)))
@@ -710,6 +729,7 @@ def reset_waiting_time(bot, player):
 
     if player.waiting_time < WAITING_TIME:
         player.waiting_time = WAITING_TIME
+        gm.persist_game(player.game)
         send_async(bot, chat.id,
                    text=__("Waiting time for {name} has been reset to {time} "
                            "seconds", multi=player.game.translate)

@@ -19,6 +19,7 @@
 
 
 import gettext
+import threading
 from functools import wraps
 
 from locales import available_locales
@@ -43,7 +44,13 @@ class _Underscore(object):
             in available_locales.keys()
             if locale != 'en_US'  # No translation file for en_US
         }
-        self.locale_stack = list()
+        self._local = threading.local()
+
+    @property
+    def locale_stack(self):
+        if not hasattr(self._local, 'locale_stack'):
+            self._local.locale_stack = list()
+        return self._local.locale_stack
 
     def push(self, locale):
         self.locale_stack.append(locale)
@@ -63,7 +70,7 @@ class _Underscore(object):
 
     def __call__(self, singular, plural=None, n=1, locale=None):
         if not locale:
-            locale = self.locale_stack[-1]
+            locale = self.locale_stack[-1] if self.locale_stack else 'en_US'
 
         if locale not in self.translators.keys():
             if n == 1:
@@ -112,9 +119,10 @@ def user_locale(func):
         else:
             _.push('en_US')
 
-        result = func(update, context, *pargs, **kwargs)
-        _.pop()
-        return result
+        try:
+            return func(update, context, *pargs, **kwargs)
+        finally:
+            _.pop()
     return wrapped
 
 
@@ -125,6 +133,7 @@ def game_locales(func):
         user, chat = _user_chat_from_update(update)
         player = gm.player_for_user_in_chat(user, chat)
         locales = list()
+        initial_depth = len(_.locale_stack)
 
         if player:
             for player in player.game.players:
@@ -141,12 +150,11 @@ def game_locales(func):
                 _.push(loc)
                 locales.append(loc)
 
-        result = func(update, context, *pargs, **kwargs)
-
-        while _.code:
-            _.pop()
-
-        return result
+        try:
+            return func(update, context, *pargs, **kwargs)
+        finally:
+            while len(_.locale_stack) > initial_depth:
+                _.pop()
     return wrapped
 
 
@@ -154,6 +162,8 @@ def _user_chat_from_update(update):
     user = update.effective_user
     chat = update.effective_chat
 
+    if chat is None and user is not None:
+        gm.ensure_user_loaded(user.id)
     if chat is None and user is not None and user.id in gm.userid_current:
         chat = gm.userid_current.get(user.id).game.chat
 

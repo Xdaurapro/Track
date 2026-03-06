@@ -25,10 +25,18 @@ from telegram.ext import Updater
 
 from game_manager import GameManager
 from database import db
+import user_setting  # noqa: F401
+import persisted_state  # noqa: F401
 
-db.bind('sqlite', os.getenv('UNO_DB', 'uno.sqlite3'), create_db=True)
+UNO_DB_PATH = os.getenv('UNO_DB', 'uno.sqlite3')
+UNO_DB_DIR = os.path.dirname(UNO_DB_PATH)
+if UNO_DB_DIR:
+    os.makedirs(UNO_DB_DIR, exist_ok=True)
+
+db.bind('sqlite', UNO_DB_PATH, create_db=True)
 db.generate_mapping(create_tables=True)
 
 gm = GameManager()
+gm.load_persisted_games()
 updater = Updater(token=TOKEN, workers=WORKERS, use_context=True)
 dispatcher = updater.dispatcher
