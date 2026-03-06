@@ -24,7 +24,6 @@ from user_setting import UserSetting
 from utils import send_async
 from shared_vars import dispatcher
 from internationalization import _, user_locale
-from promotions import send_promotion
 
 @user_locale
 def help_handler(update: Update, context: CallbackContext):
@@ -71,7 +70,6 @@ def help_handler(update: Update, context: CallbackContext):
           parse_mode=ParseMode.HTML,
           disable_web_page_preview=True,
       )
-      send_promotion(update.effective_chat)
 
     context.dispatcher.run_async(_send)
 
