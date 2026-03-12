@@ -297,15 +297,21 @@ STICKERS_OPTIONS = {
     "option_info": "BQADBAADxAIAAl9XmQABC5v3Z77VLfEC",
 }
 
-# TODO: Support multiple card packs
-# For now, just use classic colorblind
+from config import DEFAULT_CARDSET
+
+CARDSETS = {
+    "classic": CARDS_CLASSIC,
+    "colorblind": CARDS_CLASSIC_COLORBLIND,
+}
+_selected_cardset = CARDSETS.get(DEFAULT_CARDSET, CARDS_CLASSIC)
+
 STICKERS = {
-    **CARDS_CLASSIC_COLORBLIND["normal"],
+    **_selected_cardset["normal"],
     **STICKERS_OPTIONS,
 }
 
 STICKERS_GREY = {
-    **CARDS_CLASSIC_COLORBLIND["not_playable"],
+    **_selected_cardset["not_playable"],
 }
 
 

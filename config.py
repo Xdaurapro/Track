@@ -50,3 +50,4 @@ MIN_FAST_TURN_TIME = int(os.getenv("MIN_FAST_TURN_TIME", config.get("min_fast_tu
 MIN_PLAYERS = int(os.getenv("MIN_PLAYERS", config.get("min_players", 2)))
 STALE_GAME_UNLOAD_SECONDS = int(os.getenv("STALE_GAME_UNLOAD_SECONDS", config.get("stale_game_unload_seconds", 1800)))
 STALE_GAME_SCAN_EVERY_SECONDS = int(os.getenv("STALE_GAME_SCAN_EVERY_SECONDS", config.get("stale_game_scan_every_seconds", 60)))
+DEFAULT_CARDSET = os.getenv("DEFAULT_CARDSET", config.get("default_cardset", "classic")).lower()
