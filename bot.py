@@ -22,6 +22,7 @@ from datetime import datetime
 
 from telegram import ParseMode, InlineKeyboardMarkup, \
     InlineKeyboardButton, Update
+from telegram.error import BadRequest
 from telegram.ext import InlineQueryHandler, ChosenInlineResultHandler, \
     CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
 from telegram.ext.dispatcher import run_async
@@ -56,7 +57,7 @@ def notify_me(update: Update, context: CallbackContext):
     """Handler for /notify_me command, pm people for next game"""
     chat_id = update.message.chat_id
     if update.message.chat.type == 'private':
-        send_async(bot,
+        send_async(context.bot,
                    chat_id,
                    text=_("Send this command in a group to be notified "
                           "when a new game is started there."))
@@ -289,31 +290,63 @@ def kick_player(update: Update, context: CallbackContext):
 
 def select_game(update: Update, context: CallbackContext):
     """Handler for callback queries to select the current game"""
+    query = update.callback_query
+    if query is None:
+        return
 
-    chat_id = int(update.callback_query.data)
-    user_id = update.callback_query.from_user.id
+    try:
+        chat_id = int(query.data)
+    except (TypeError, ValueError):
+        try:
+            context.bot.answerCallbackQuery(query.id,
+                                            text=_("This button is no longer valid."),
+                                            show_alert=False,
+                                            timeout=TIMEOUT)
+        except BadRequest as err:
+            if "Query is too old" not in str(err):
+                raise
+        return
+
+    user_id = query.from_user.id
     gm.ensure_user_loaded(user_id)
-    players = gm.userid_players[user_id]
+    players = gm.userid_players.get(user_id, [])
     for player in players:
         if player.game.chat.id == chat_id:
             gm.userid_current[user_id] = player
             break
     else:
-        send_async(bot,
-                   update.callback_query.message.chat_id,
+        if query.message:
+            send_async(context.bot,
+                   query.message.chat_id,
                    text=_("Game not found."))
+        try:
+            context.bot.answerCallbackQuery(query.id,
+                                            text=_("This selection is no longer valid."),
+                                            show_alert=False,
+                                            timeout=TIMEOUT)
+        except BadRequest as err:
+            if "Query is too old" not in str(err):
+                raise
         return
 
-    def selected():
+    try:
+        # Acknowledge quickly to avoid callback expiry under load.
+        context.bot.answerCallbackQuery(query.id,
+                                        text=_("Please switch to the group you selected!"),
+                                        show_alert=False,
+                                        timeout=TIMEOUT)
+    except BadRequest as err:
+        if "Query is too old" in str(err):
+            return
+        raise
+
+    def selected(query, user_id):
+        if query.message is None:
+            return
         back = [[InlineKeyboardButton(text=_("Back to last group"),
                                       switch_inline_query='')]]
-        context.bot.answerCallbackQuery(update.callback_query.id,
-                                text=_("Please switch to the group you selected!"),
-                                show_alert=False,
-                                timeout=TIMEOUT)
-
-        context.bot.editMessageText(chat_id=update.callback_query.message.chat_id,
-                            message_id=update.callback_query.message.message_id,
+        context.bot.editMessageText(chat_id=query.message.chat_id,
+                            message_id=query.message.message_id,
                             text=_("Selected group: {group}\n"
                                    "<b>Make sure that you switch to the correct "
                                    "group!</b>").format(
@@ -321,21 +354,26 @@ def select_game(update: Update, context: CallbackContext):
                             reply_markup=InlineKeyboardMarkup(back),
                             parse_mode=ParseMode.HTML,
                             timeout=TIMEOUT)
-
-    dispatcher.run_async(selected)
+    dispatcher.run_async(selected, query, user_id)
 
 
 @game_locales
 def status_update(update: Update, context: CallbackContext):
     """Remove player from game if user leaves the group"""
-    chat = update.message.chat
+    message = update.effective_message
+    chat = update.effective_chat
+    if message is None or chat is None:
+        return
 
-    if update.message.left_chat_member:
-        user = update.message.left_chat_member
+    if message.left_chat_member:
+        user = message.left_chat_member
+        player = gm.player_for_user_in_chat(user, chat)
+        if not player:
+            return
+        game = player.game
 
         try:
             gm.leave_game(user, chat)
-            game = gm.player_for_user_in_chat(user, chat).game
 
         except NoGameInChatError:
             pass

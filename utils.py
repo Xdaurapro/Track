@@ -20,6 +20,7 @@
 
 import logging
 from telegram import Update
+from telegram.error import BadRequest, TimedOut
 from telegram.ext import CallbackContext
 
 from internationalization import _, __
@@ -28,7 +29,7 @@ from shared_vars import gm, dispatcher
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT = 2.5
+TIMEOUT = 10
 
 
 def list_subtract(list1, list2):
@@ -79,7 +80,23 @@ def display_color_group(color, game):
 
 def error(update: Update, context: CallbackContext):
     """Simple error handler"""
-    logger.exception(context.error)
+    err = context.error if context else None
+    if err is None:
+        logger.error("Unknown error in update handler")
+        return
+
+    # Telegram API timeouts are transient and should not spam traceback logs.
+    if isinstance(err, TimedOut):
+        logger.warning("Telegram request timed out")
+        return
+
+    # Stale callback queries are expected when users tap old inline keyboards.
+    if isinstance(err, BadRequest) and "Query is too old" in str(err):
+        logger.info("Ignoring stale callback query")
+        return
+
+    logger.error("Unhandled exception in update handler",
+                 exc_info=(type(err), err, err.__traceback__))
 
 
 def send_async(bot, *args, **kwargs):
@@ -89,8 +106,8 @@ def send_async(bot, *args, **kwargs):
 
     try:
         dispatcher.run_async(bot.sendMessage, *args, **kwargs)
-    except Exception as e:
-        error(None, None, e)
+    except Exception:
+        logger.exception("Failed to schedule async sendMessage")
 
 
 def answer_async(bot, *args, **kwargs):
@@ -100,8 +117,8 @@ def answer_async(bot, *args, **kwargs):
 
     try:
         dispatcher.run_async(bot.answerInlineQuery, *args, **kwargs)
-    except Exception as e:
-        error(None, None, e)
+    except Exception:
+        logger.exception("Failed to schedule async answerInlineQuery")
 
 
 def game_is_running(game):
