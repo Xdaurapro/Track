@@ -20,6 +20,52 @@
 # Modify this file if you want a different startup sequence, for example using
 # a Webhook
 
+import logging
+from pathlib import Path
+
+from telegram import BotCommand
+
+
+logger = logging.getLogger(__name__)
+
+
+def _load_bot_commands():
+    commands_path = Path(__file__).with_name('commandlist.txt')
+    commands = []
+
+    for line in commands_path.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+
+        command, separator, description = line.partition(' - ')
+        if not separator:
+            logger.warning("[WARN][commands] Skipping malformed command line: %s",
+                           line)
+            continue
+
+        commands.append(BotCommand(command.lstrip('/').strip(),
+                                   description.strip()))
+
+    return commands
+
+
+def set_bot_commands(updater):
+    commands = _load_bot_commands()
+    if not commands:
+        logger.warning("[WARN][commands] No bot commands configured")
+        return
+
+    try:
+        updater.bot.set_my_commands(commands)
+    except Exception:
+        logger.warning("[WARN][commands] Failed to set Telegram bot commands",
+                       exc_info=True)
+    else:
+        logger.info("[INFO][commands] Set %d Telegram bot commands",
+                    len(commands))
+
 
 def start_bot(updater):
+    set_bot_commands(updater)
     updater.start_polling()

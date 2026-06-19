@@ -2,7 +2,7 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](./LICENSE)
 
-Telegram Bot that allows you to play the popular card game UNO via inline queries. The bot currently runs as [@unobot](http://telegram.me/unobot).
+Telegram Bot that allows you to play the popular card game UNO via inline queries. The bot currently runs as [@play_unobot](http://telegram.me/play_unobot).
 
 This is a performance and stability optimized version of the original [jh0ker/mau_mau_bot](https://github.com/jh0ker/mau_mau_bot).
 
