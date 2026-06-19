@@ -28,6 +28,13 @@ from locales import available_locales
 from internationalization import _, user_locale
 
 
+def _get_or_create_user_setting(user_id):
+    us = UserSetting.get(id=user_id)
+    if not us:
+        us = UserSetting(id=user_id)
+    return us
+
+
 @user_locale
 def show_settings(update: Update, context: CallbackContext):
     chat = update.message.chat
@@ -38,10 +45,7 @@ def show_settings(update: Update, context: CallbackContext):
                           "the bot."))
         return
 
-    us = UserSetting.get(id=update.message.from_user.id)
-
-    if not us:
-        us = UserSetting(id=update.message.from_user.id)
+    us = _get_or_create_user_setting(update.message.from_user.id)
 
     if not us.stats:
         stats = '📊' + ' ' + _("Enable statistics")
@@ -61,7 +65,7 @@ def kb_select(update: Update, context: CallbackContext):
     option = context.match[1]
 
     if option == '📊':
-        us = UserSetting.get(id=user.id)
+        us = _get_or_create_user_setting(user.id)
         us.stats = True
         send_async(context.bot, chat.id, text=_("Enabled statistics!"))
 
@@ -74,7 +78,7 @@ def kb_select(update: Update, context: CallbackContext):
                                                     one_time_keyboard=True))
 
     elif option == '❌':
-        us = UserSetting.get(id=user.id)
+        us = _get_or_create_user_setting(user.id)
         us.stats = False
         us.first_places = 0
         us.games_played = 0
@@ -89,7 +93,7 @@ def locale_select(update: Update, context: CallbackContext):
     option = context.match[1]
 
     if option in available_locales:
-        us = UserSetting.get(id=user.id)
+        us = _get_or_create_user_setting(user.id)
         us.lang = option
         _.push(option)
         send_async(context.bot, chat.id, text=_("Set locale!"))

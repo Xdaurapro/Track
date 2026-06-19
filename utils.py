@@ -20,7 +20,7 @@
 
 import logging
 from telegram import Update
-from telegram.error import BadRequest, TimedOut
+from telegram.error import BadRequest, TimedOut, ChatMigrated, Unauthorized
 from telegram.ext import CallbackContext
 
 from internationalization import _, __
@@ -105,7 +105,7 @@ def send_async(bot, *args, **kwargs):
         kwargs['timeout'] = TIMEOUT
 
     try:
-        dispatcher.run_async(bot.sendMessage, *args, **kwargs)
+        dispatcher.run_async(_send_message_with_migration_handling, bot, *args, **kwargs)
     except Exception:
         logger.exception("Failed to schedule async sendMessage")
 
@@ -119,6 +119,75 @@ def answer_async(bot, *args, **kwargs):
         dispatcher.run_async(bot.answerInlineQuery, *args, **kwargs)
     except Exception:
         logger.exception("Failed to schedule async answerInlineQuery")
+
+
+def _extract_chat_id(args, kwargs):
+    if 'chat_id' in kwargs:
+        return kwargs['chat_id']
+    if args:
+        return args[0]
+    return None
+
+
+def _replace_chat_id(args, kwargs, new_chat_id):
+    if 'chat_id' in kwargs:
+        new_kwargs = dict(kwargs)
+        new_kwargs['chat_id'] = new_chat_id
+        return args, new_kwargs
+
+    if args:
+        return (new_chat_id,) + tuple(args[1:]), kwargs
+
+    return args, kwargs
+
+
+def _send_message_with_migration_handling(bot, *args, **kwargs):
+    try:
+        bot.sendMessage(*args, **kwargs)
+    except Unauthorized as err:
+        logger.info("Dropping sendMessage: unauthorized (%s) (chat_id=%s)",
+                    err, _extract_chat_id(args, kwargs))
+        return
+    except ChatMigrated as err:
+        old_chat_id = _extract_chat_id(args, kwargs)
+        new_chat_id = err.new_chat_id
+
+        if old_chat_id is not None and old_chat_id != new_chat_id:
+            gm.migrate_chat_id(old_chat_id, new_chat_id)
+
+        logger.info("Chat migrated from %s to %s; retrying sendMessage",
+                    old_chat_id, new_chat_id)
+        retry_args, retry_kwargs = _replace_chat_id(args, kwargs, new_chat_id)
+        try:
+            bot.sendMessage(*retry_args, **retry_kwargs)
+        except Unauthorized as send_err:
+            logger.info("Dropping sendMessage after migration: unauthorized (%s) (chat_id=%s)",
+                        send_err, _extract_chat_id(retry_args, retry_kwargs))
+            return
+        except BadRequest as send_err:
+            msg = str(send_err).lower()
+            if "chat not found" in msg:
+                logger.info("Dropping sendMessage after migration: chat not found (chat_id=%s)",
+                            new_chat_id)
+                return
+            if "message to be replied not found" in msg:
+                retry_kwargs = dict(retry_kwargs)
+                retry_kwargs.pop("reply_to_message_id", None)
+                bot.sendMessage(*retry_args, **retry_kwargs)
+                return
+            raise
+    except BadRequest as err:
+        msg = str(err).lower()
+        if "chat not found" in msg:
+            logger.info("Dropping sendMessage: chat not found (chat_id=%s)",
+                        _extract_chat_id(args, kwargs))
+            return
+        if "message to be replied not found" in msg:
+            retry_kwargs = dict(kwargs)
+            retry_kwargs.pop("reply_to_message_id", None)
+            bot.sendMessage(*args, **retry_kwargs)
+            return
+        raise
 
 
 def game_is_running(game):

@@ -12,4 +12,11 @@ services:
         max-file: "1"
     volumes:
       - ./data:/app/data
+    environment:
+      GAME_THREAD_WORKERS: "32"
+      GAME_THREAD_QUEUE_DEPTH_WARN: "4"
+      GAME_THREAD_SLOW_QUEUE_WARN_SECONDS: "1.5"
+      GAME_THREAD_SLOW_RUN_WARN_SECONDS: "2.0"
+      GAME_THREAD_IDLE_TTL_SECONDS: "300"
+      GAME_THREAD_CLEANUP_EVERY_SUBMITS: "20"
     restart: unless-stopped

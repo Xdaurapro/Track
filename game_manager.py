@@ -30,7 +30,7 @@ from player import Player
 from config import STALE_GAME_UNLOAD_SECONDS, STALE_GAME_SCAN_EVERY_SECONDS
 from errors import (AlreadyJoinedError, LobbyClosedError, NoGameInChatError,
                     NotEnoughPlayersError)
-from persisted_state import PersistedChatState
+from persisted_state import PersistedChatState, PersistedUserChat
 
 class GameManager(object):
     """ Manages all running games by using a confusing amount of dicts """
@@ -157,6 +157,49 @@ class GameManager(object):
         elif row:
             row.delete()
 
+        # Keep per-user chat index in sync for fast ensure_user_loaded lookups.
+        self._sync_user_chat_index_for_chat(chat_id, games=games)
+
+    def _sync_user_chat_index_for_chat(self, chat_id, games=None):
+        if games is None:
+            row = PersistedChatState.get(chat_id=chat_id)
+            if not row:
+                for link in PersistedUserChat.select(lambda uc: uc.chat_id == chat_id):
+                    link.delete()
+                return
+            try:
+                games_data = json.loads(row.payload)
+            except json.JSONDecodeError:
+                self.logger.warning("Skipping corrupted persisted payload for chat_id=%s", chat_id)
+                for link in PersistedUserChat.select(lambda uc: uc.chat_id == chat_id):
+                    link.delete()
+                return
+
+            user_ids = set()
+            for game_data in games_data:
+                for player_data in game_data.get('players', []):
+                    user_data = player_data.get('user') or {}
+                    user_id = user_data.get('id')
+                    if user_id is not None:
+                        user_ids.add(user_id)
+        else:
+            user_ids = set()
+            for game in games:
+                for player in game.players:
+                    user_ids.add(player.user.id)
+
+        existing_links = list(PersistedUserChat.select(lambda uc: uc.chat_id == chat_id))
+        existing_user_ids = {link.user_id for link in existing_links}
+
+        # Delete only stale links to avoid delete+recreate identity-map conflicts.
+        for link in existing_links:
+            if link.user_id not in user_ids:
+                link.delete()
+
+        # Insert only missing links.
+        for user_id in user_ids - existing_user_ids:
+            PersistedUserChat(user_id=user_id, chat_id=chat_id)
+
     def persist_game(self, game):
         game.touch()
         self._persist_chat(game.chat.id)
@@ -218,19 +261,49 @@ class GameManager(object):
     def ensure_user_loaded(self, user_id):
         if user_id in self.userid_players:
             return
-        with db_session:
-            rows = PersistedChatState.select()[:]
 
-        for row in rows:
-            if row.chat_id in self.chatid_games:
+        with db_session:
+            chat_ids = [uc.chat_id for uc in PersistedUserChat.select(lambda uc: uc.user_id == user_id)]
+
+        for chat_id in chat_ids:
+            if chat_id in self.chatid_games:
                 continue
-            games_data = json.loads(row.payload)
-            if not any(any(player['user']['id'] == user_id for player in game_data.get('players', [])) for game_data in games_data):
+            games = self._load_chat_from_storage(chat_id)
+            if not games:
                 continue
-            games = [self._deserialize_game(game_data) for game_data in games_data]
-            self.chatid_games[row.chat_id] = games
+            self.chatid_games[chat_id] = games
             for game in games:
                 self._index_loaded_game(game)
+
+    @db_session
+    def rebuild_user_chat_index(self):
+        """Rebuild persisted user->chat index from persisted chat payloads."""
+        for link in PersistedUserChat.select():
+            link.delete()
+
+        rows = PersistedChatState.select()[:]
+        links_created = 0
+        for row in rows:
+            try:
+                games_data = json.loads(row.payload)
+            except json.JSONDecodeError:
+                self.logger.warning("Skipping corrupted persisted payload for chat_id=%s", row.chat_id)
+                continue
+
+            user_ids = set()
+            for game_data in games_data:
+                for player_data in game_data.get('players', []):
+                    user_data = player_data.get('user') or {}
+                    user_id = user_data.get('id')
+                    if user_id is not None:
+                        user_ids.add(user_id)
+
+            for user_id in user_ids:
+                PersistedUserChat(user_id=user_id, chat_id=row.chat_id)
+                links_created += 1
+
+        self.logger.info("Rebuilt user-chat index: %d links across %d chats",
+                         links_created, len(rows))
 
     def _maybe_unload_stale_games(self, exclude_chat_id=None):
         if STALE_GAME_UNLOAD_SECONDS <= 0:
@@ -255,6 +328,48 @@ class GameManager(object):
             for game in self.chatid_games.get(chat_id, []):
                 self._deindex_game(game)
             del self.chatid_games[chat_id]
+
+    @db_session
+    def migrate_chat_id(self, old_chat_id, new_chat_id):
+        """Move all in-memory and persisted state to a migrated supergroup chat id."""
+        if old_chat_id == new_chat_id:
+            return
+
+        games = self.chatid_games.pop(old_chat_id, [])
+        if games:
+            for game in games:
+                game.chat = self._chat_stub(
+                    new_chat_id,
+                    getattr(game.chat, 'title', None),
+                    getattr(game.chat, 'type', 'supergroup')
+                )
+            self.chatid_games.setdefault(new_chat_id, []).extend(games)
+
+        reminders = self.remind_dict.pop(old_chat_id, None)
+        if reminders:
+            self.remind_dict.setdefault(new_chat_id, set()).update(reminders)
+
+        old_row = PersistedChatState.get(chat_id=old_chat_id)
+        if old_row:
+            new_row = PersistedChatState.get(chat_id=new_chat_id)
+            if new_row:
+                old_payload = json.loads(old_row.payload)
+                new_payload = json.loads(new_row.payload)
+                new_row.payload = json.dumps(new_payload + old_payload)
+                new_row.updated_at = datetime.now()
+                old_row.delete()
+            else:
+                PersistedChatState(
+                    chat_id=new_chat_id,
+                    payload=old_row.payload,
+                    updated_at=datetime.now()
+                )
+                old_row.delete()
+        elif games:
+            self._persist_chat(new_chat_id)
+
+        self._sync_user_chat_index_for_chat(old_chat_id, games=[])
+        self._sync_user_chat_index_for_chat(new_chat_id)
 
     def new_game(self, chat):
         """

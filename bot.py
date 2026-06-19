@@ -19,13 +19,13 @@
 
 import logging
 from datetime import datetime
+from functools import wraps
 
 from telegram import ParseMode, InlineKeyboardMarkup, \
     InlineKeyboardButton, Update
 from telegram.error import BadRequest
 from telegram.ext import InlineQueryHandler, ChosenInlineResultHandler, \
     CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
-from telegram.ext.dispatcher import run_async
 
 import card as c
 import settings
@@ -41,6 +41,7 @@ from results import (add_call_bluff, add_choose_color, add_draw, add_gameinfo,
 from shared_vars import gm, updater, dispatcher
 from simple_commands import help_handler
 from start_bot import start_bot
+from game_threads import game_thread_runner
 from utils import display_name
 from utils import send_async, answer_async, error, TIMEOUT, user_is_creator_or_admin, user_is_creator, game_is_running
 
@@ -51,6 +52,59 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logging.getLogger('apscheduler').setLevel(logging.WARNING)
+
+
+def _chat_key(update: Update):
+    chat = update.effective_chat
+    if chat is None:
+        return "chat:unknown"
+    return f"chat:{chat.id}"
+
+
+def _callback_game_key(update: Update):
+    query = update.callback_query
+    if query:
+        try:
+            return f"chat:{int(query.data)}"
+        except (TypeError, ValueError):
+            return "callback:fallback"
+    return "callback:unknown"
+
+
+def _inline_result_key(update: Update):
+    chosen = update.chosen_inline_result
+    if chosen is None or chosen.from_user is None:
+        return "inline:unknown"
+
+    user_id = chosen.from_user.id
+    player = gm.userid_current.get(user_id)
+    if player:
+        return f"chat:{player.game.chat.id}"
+    return "inline-result:fallback"
+
+
+def _inline_query_key(update: Update):
+    inline_query = update.inline_query
+    if inline_query is None or inline_query.from_user is None:
+        return "inline-query:unknown"
+
+    user_id = inline_query.from_user.id
+    player = gm.userid_current.get(user_id)
+    if player:
+        return f"chat:{player.game.chat.id}"
+    return "inline-query:fallback"
+
+
+def _threaded_by(key_fn, require_message=False):
+    def decorator(func):
+        @wraps(func)
+        def wrapped(update: Update, context: CallbackContext):
+            if require_message and update.message is None:
+                return
+            key = key_fn(update)
+            game_thread_runner.submit(key, func, update, context)
+        return wrapped
+    return decorator
 
 @user_locale
 def notify_me(update: Update, context: CallbackContext):
@@ -307,28 +361,6 @@ def select_game(update: Update, context: CallbackContext):
                 raise
         return
 
-    user_id = query.from_user.id
-    gm.ensure_user_loaded(user_id)
-    players = gm.userid_players.get(user_id, [])
-    for player in players:
-        if player.game.chat.id == chat_id:
-            gm.userid_current[user_id] = player
-            break
-    else:
-        if query.message:
-            send_async(context.bot,
-                   query.message.chat_id,
-                   text=_("Game not found."))
-        try:
-            context.bot.answerCallbackQuery(query.id,
-                                            text=_("This selection is no longer valid."),
-                                            show_alert=False,
-                                            timeout=TIMEOUT)
-        except BadRequest as err:
-            if "Query is too old" not in str(err):
-                raise
-        return
-
     try:
         # Acknowledge quickly to avoid callback expiry under load.
         context.bot.answerCallbackQuery(query.id,
@@ -340,21 +372,42 @@ def select_game(update: Update, context: CallbackContext):
             return
         raise
 
-    def selected(query, user_id):
-        if query.message is None:
-            return
-        back = [[InlineKeyboardButton(text=_("Back to last group"),
-                                      switch_inline_query='')]]
-        context.bot.editMessageText(chat_id=query.message.chat_id,
-                            message_id=query.message.message_id,
-                            text=_("Selected group: {group}\n"
-                                   "<b>Make sure that you switch to the correct "
-                                   "group!</b>").format(
-                                group=gm.userid_current[user_id].game.chat.title),
-                            reply_markup=InlineKeyboardMarkup(back),
-                            parse_mode=ParseMode.HTML,
-                            timeout=TIMEOUT)
-    dispatcher.run_async(selected, query, user_id)
+    game_thread_runner.submit(
+        _callback_game_key(update),
+        _select_game_after_ack,
+        context.bot,
+        query,
+        chat_id
+    )
+
+
+def _select_game_after_ack(bot, query, chat_id):
+    user_id = query.from_user.id
+    gm.ensure_user_loaded(user_id)
+    players = gm.userid_players.get(user_id, [])
+    for player in players:
+        if player.game.chat.id == chat_id:
+            gm.userid_current[user_id] = player
+            break
+    else:
+        if query.message:
+            send_async(bot, query.message.chat_id, text=_("Game not found."))
+        return
+
+    if query.message is None:
+        return
+
+    back = [[InlineKeyboardButton(text=_("Back to last group"),
+                                  switch_inline_query='')]]
+    bot.editMessageText(chat_id=query.message.chat_id,
+                        message_id=query.message.message_id,
+                        text=_("Selected group: {group}\n"
+                               "<b>Make sure that you switch to the correct "
+                               "group!</b>").format(
+                            group=gm.userid_current[user_id].game.chat.title),
+                        reply_markup=InlineKeyboardMarkup(back),
+                        parse_mode=ParseMode.HTML,
+                        timeout=TIMEOUT)
 
 
 @game_locales
@@ -714,7 +767,17 @@ def process_result(update: Update, context: CallbackContext):
 
     logger.debug("Selected result: " + result_id)
 
-    result_id, anti_cheat = result_id.split(':')
+    # Inline result ids from stale/legacy clients may not carry anti-cheat data.
+    # Ignore them instead of crashing the update handler.
+    if ':' not in result_id:
+        logger.info("Ignoring malformed chosen inline result id: %s", result_id)
+        return
+
+    result_id, anti_cheat = result_id.rsplit(':', 1)
+    if not anti_cheat.isdigit():
+        logger.info("Ignoring malformed anti-cheat token in result id: %s", anti_cheat)
+        return
+
     last_anti_cheat = player.anti_cheat
     player.anti_cheat += 1
 
@@ -775,26 +838,42 @@ def reset_waiting_time(bot, player):
 
 
 # Add all handlers to the dispatcher and run the bot
-dispatcher.add_handler(InlineQueryHandler(reply_to_query))
-dispatcher.add_handler(ChosenInlineResultHandler(process_result, pass_job_queue=True))
+threaded_new_game = _threaded_by(_chat_key, require_message=True)(new_game)
+threaded_kill_game = _threaded_by(_chat_key, require_message=True)(kill_game)
+threaded_join_game = _threaded_by(_chat_key, require_message=True)(join_game)
+threaded_leave_game = _threaded_by(_chat_key, require_message=True)(leave_game)
+threaded_kick_player = _threaded_by(_chat_key, require_message=True)(kick_player)
+threaded_start_game = _threaded_by(_chat_key, require_message=True)(start_game)
+threaded_close_game = _threaded_by(_chat_key, require_message=True)(close_game)
+threaded_open_game = _threaded_by(_chat_key, require_message=True)(open_game)
+threaded_enable_translations = _threaded_by(_chat_key, require_message=True)(enable_translations)
+threaded_disable_translations = _threaded_by(_chat_key, require_message=True)(disable_translations)
+threaded_skip_player = _threaded_by(_chat_key, require_message=True)(skip_player)
+threaded_status_update = _threaded_by(_chat_key, require_message=True)(status_update)
+threaded_process_result = _threaded_by(_inline_result_key)(process_result)
+threaded_reply_to_query = _threaded_by(_inline_query_key)(reply_to_query)
+threaded_notify_me = _threaded_by(_chat_key, require_message=True)(notify_me)
+
+dispatcher.add_handler(InlineQueryHandler(threaded_reply_to_query))
+dispatcher.add_handler(ChosenInlineResultHandler(threaded_process_result, pass_job_queue=True))
 dispatcher.add_handler(CallbackQueryHandler(select_game))
-dispatcher.add_handler(CommandHandler('start', start_game, pass_args=True, pass_job_queue=True))
-dispatcher.add_handler(CommandHandler('new', new_game))
-dispatcher.add_handler(CommandHandler('kill', kill_game))
-dispatcher.add_handler(CommandHandler('join', join_game))
-dispatcher.add_handler(CommandHandler('leave', leave_game))
-dispatcher.add_handler(CommandHandler('kick', kick_player))
-dispatcher.add_handler(CommandHandler('open', open_game))
-dispatcher.add_handler(CommandHandler('close', close_game))
+dispatcher.add_handler(CommandHandler('start', threaded_start_game, pass_args=True, pass_job_queue=True))
+dispatcher.add_handler(CommandHandler('new', threaded_new_game))
+dispatcher.add_handler(CommandHandler('kill', threaded_kill_game))
+dispatcher.add_handler(CommandHandler('join', threaded_join_game))
+dispatcher.add_handler(CommandHandler('leave', threaded_leave_game))
+dispatcher.add_handler(CommandHandler('kick', threaded_kick_player))
+dispatcher.add_handler(CommandHandler('open', threaded_open_game))
+dispatcher.add_handler(CommandHandler('close', threaded_close_game))
 dispatcher.add_handler(CommandHandler('enable_translations',
-                                      enable_translations))
+                                      threaded_enable_translations))
 dispatcher.add_handler(CommandHandler('disable_translations',
-                                      disable_translations))
-dispatcher.add_handler(CommandHandler('skip', skip_player))
-dispatcher.add_handler(CommandHandler('notify_me', notify_me))
+                                      threaded_disable_translations))
+dispatcher.add_handler(CommandHandler('skip', threaded_skip_player))
+dispatcher.add_handler(CommandHandler('notify_me', threaded_notify_me))
 simple_commands.register()
 settings.register()
-dispatcher.add_handler(MessageHandler(Filters.status_update, status_update))
+dispatcher.add_handler(MessageHandler(Filters.status_update, threaded_status_update))
 dispatcher.add_error_handler(error)
 
 start_bot(updater)

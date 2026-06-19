@@ -37,6 +37,7 @@ db.bind('sqlite', UNO_DB_PATH, create_db=True)
 db.generate_mapping(create_tables=True)
 
 gm = GameManager()
+gm.rebuild_user_chat_index()
 gm.load_persisted_games()
 updater = Updater(token=TOKEN, workers=WORKERS, use_context=True)
 dispatcher = updater.dispatcher

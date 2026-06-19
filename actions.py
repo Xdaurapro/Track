@@ -11,6 +11,7 @@ from apscheduler.jobstores.base import JobLookupError
 
 from config import TIME_REMOVAL_AFTER_SKIP, MIN_FAST_TURN_TIME
 from errors import DeckEmptyError, NotEnoughPlayersError
+from game_threads import game_thread_runner
 from internationalization import __, _
 from shared_vars import gm
 from user_setting import UserSetting
@@ -222,4 +223,10 @@ def skip_job(context: CallbackContext):
     game = player.game
     if game_is_running(game):
         job_queue = context.job.context.job_queue
-        do_skip(context.bot, player, job_queue)
+        game_thread_runner.submit(
+            f"chat:{game.chat.id}",
+            do_skip,
+            context.bot,
+            player,
+            job_queue
+        )
