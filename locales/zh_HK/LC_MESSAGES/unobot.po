@@ -242,10 +242,6 @@ msgstr ""
 "{name1}比人連接skip咗4次, 已經踢咗\n"
 "遊戲結束"
 
-#: bot.py:455
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "所有update都喺晒度: https://telegram.me/unobotnews"
-
 #: bot.py:513
 #, python-format
 msgid "Current game: {group}"

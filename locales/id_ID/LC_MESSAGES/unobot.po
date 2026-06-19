@@ -266,10 +266,6 @@ msgstr ""
 "dikeluarkan dari permainan.\n"
 "Permainan berkahir."
 
-#: bot.py:455
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "Semua berita ada di sini: https://telegram.me/unobotnews"
-
 #: bot.py:513
 #, python-format
 msgid "Current game: {group}"

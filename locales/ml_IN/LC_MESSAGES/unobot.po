@@ -267,10 +267,6 @@ msgstr ""
 "അയാളെ പുറത്താക്കി. \n"
 "ഗെയിം അവസാനിച്ചു."
 
-#: bot.py:455
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "അപ്‌ഡേറ്റുകൾക്കായി ഗ്രൂപ്പ് ജോയിൻ ചെയ്യാം  https://telegram.me/unobotnews"
-
 #: bot.py:513
 #, python-format
 msgid "Current game: {group}"

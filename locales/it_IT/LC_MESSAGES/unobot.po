@@ -263,10 +263,6 @@ msgstr ""
 "{name} è stato saltato per quattro turni ed è stato rimosso dalla partita.\n"
 "La partita è conclusa."
 
-#: bot.py:455
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "Tutte le novità le trovi qui: https://telegram.me/unobotnews"
-
 #: bot.py:513
 #, python-format
 msgid "Current game: {group}"

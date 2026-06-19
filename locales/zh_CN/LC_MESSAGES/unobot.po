@@ -497,10 +497,6 @@ msgstr ""
 "原始图标可在 http://game-icons.net 获取。\n"
 "图标由 ɳick 编辑"
 
-#: simple_commands.py:105
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "查看机器人的所有更新: https://telegram.me/unobotnews"
-
 #: simple_commands.py:115
 msgid ""
 "You did not enable statistics. Use /settings in a private chat with the bot "

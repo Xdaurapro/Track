@@ -503,10 +503,6 @@ msgstr "Thiết kế:\n"
 "Biểu tượng bỏ qua bởi  <a href=\"http://delapouite.com/\">Delapouite</a>\n"
 "Chình sửa biểu tượng bởi ɳick"
 
-#: simple_commands.py:105
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "Tin tức mới về bot ở đây: https://telegram.me/unobotnews"
-
 #: simple_commands.py:115
 msgid ""
 "You did not enable statistics. Use /settings in a private chat with the bot "

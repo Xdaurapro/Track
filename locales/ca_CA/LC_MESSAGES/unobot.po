@@ -261,10 +261,6 @@ msgstr ""
 "partida.\n"
 "Partida finalitzada."
 
-#: bot.py:455
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "Totes les noticies aquí: https://telegram.me/unobotnews"
-
 #: bot.py:513
 #, python-format
 msgid "Current game: {group}"

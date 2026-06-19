@@ -255,10 +255,6 @@ msgstr ""
 "{name} teve suas jogadas puladas quatro vezes seguidas e foi removido(a) do jogo.\n"
 "O jogo acabou."
 
-#: bot.py:455
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "Todas as novidades aqui: https://telegram.me/unobotnews"
-
 #: bot.py:513
 #, python-format
 msgid "Current game: {group}"

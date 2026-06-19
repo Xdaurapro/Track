@@ -273,10 +273,6 @@ msgstr ""
 "entfernt.\n"
 "Das Spiel wurde beendet."
 
-#: bot.py:455
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "Alle News hier: https://telegram.me/unobotnews"
-
 #: bot.py:513
 #, python-format
 msgid "Current game: {game}"

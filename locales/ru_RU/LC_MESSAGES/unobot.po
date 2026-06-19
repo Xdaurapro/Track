@@ -268,10 +268,6 @@ msgstr ""
 "{name1} был пропущен 4 раза поряд и вышел из игры.\n"
 "Игра окончена."
 
-#: bot.py:455
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "Все новости здесь: https://telegram.me/unobotnews"
-
 #: bot.py:513
 #, python-format
 msgid "Current game: {game}"

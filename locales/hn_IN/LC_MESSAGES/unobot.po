@@ -263,10 +263,6 @@ msgstr ""
 "प्रस्थान.\n"
 "खेल पूरा हुआ."
 
-#: bot.py:455
-msgid "All news here: https://telegram.me/unobotnews"
-msgstr "सभी समाचार यहाँ: https://telegram.me/unobotnews"
-
 #: bot.py:513
 #, python-format
 msgid "Current game: {group}"

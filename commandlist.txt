@@ -15,4 +15,3 @@ modes - Explanation of game modes
 settings - Language and other settings 
 stats - Show statistics 
 source - See source information 
-news - All news about this bot
