@@ -34,8 +34,8 @@ def help_handler(update: Update, context: CallbackContext):
       " running game with /join\n"
       "3. After at least two players have joined, start the game with"
       " /start\n"
-      "4. Type <code>@play_unobot</code> into your chat box and hit "
-      "<b>space</b>, or click the <code>via @play_unobot</code> text "
+      "4. Type <code>@Unoaurabot</code> into your chat box and hit "
+      "<b>space</b>, or click the <code>via @Unoaurabot</code> text "
       "next to messages. You will see your cards (some greyed out), "
       "any extra options like drawing, and a <b>?</b> to see the "
       "current game state. The <b>greyed out cards</b> are those you "
@@ -85,7 +85,7 @@ def modes(update: Update, context: CallbackContext):
 def source(update: Update, context: CallbackContext):
     """Handler for the /help command"""
     source_text = (
-        "Source code: https://github.com/Tackyou/mau_mau_bot\n\n"
+        "Source code: https://github.com/jhoker/mau_mau_bot\n\n"
         "A performance optimized version of the original "
         "https://github.com/jh0ker/mau_mau_bot\n\n"
         "Attributions:\n"
