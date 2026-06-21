@@ -546,3 +546,22 @@ class GameManager(object):
                 player.game.touch()
                 return player
         return None
+      def check_for_winner(self, game):
+      """
+      Check if there is a winner in the game
+      """
+      # Check if any of the players have won the gam
+      for player in game.players:
+        if player.has_won():
+          return player
+      return None
+    def end_game_if_one_player_won(self, game):
+      """
+      End the game if one player has won
+      """
+      winner = self.check_for_winner(game)
+      if winner:
+        self.end_game(game)
+
+        # Send a message to the chat announcing the winner
+        self.send_message(game.chat, f"The winner is {winner.user.name}!")
