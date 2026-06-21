@@ -546,6 +546,7 @@ class GameManager(object):
                 player.game.touch()
                 return player
         return None
+      
       def check_for_winner(self, game):
       """
       Check if there is a winner in the game
