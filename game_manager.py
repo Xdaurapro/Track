@@ -529,40 +529,4 @@ class GameManager(object):
                 except KeyError:
                     pass
 
-        self.chatid_games[chat.id].remove(game)
-        if not self.chatid_games[chat.id]:
-            del self.chatid_games[chat.id]
-        self._persist_chat(chat.id)
-
-    def player_for_user_in_chat(self, user, chat):
-        if user is None or chat is None:
-            return None
-        self.ensure_chat_loaded(chat)
-        self.ensure_user_loaded(user.id)
-        self._maybe_unload_stale_games(exclude_chat_id=chat.id)
-        players = self.userid_players.get(user.id, list())
-        for player in players:
-            if player.game.chat.id == chat.id:
-                player.game.touch()
-                return player
-        return None
-      
-      def check_for_winner(self, game):
-      """
-      Check if there is a winner in the game
-      """
-      # Check if any of the players have won the gam
-      for player in game.players:
-        if player.has_won():
-          return player
-      return None
-    def end_game_if_one_player_won(self, game):
-      """
-      End the game if one player has won
-      """
-      winner = self.check_for_winner(game)
-      if winner:
-        self.end_game(game)
-
-        # Send a message to the chat announcing the winner
-        self.send_message(game.chat, f"The winner is {winner.user.name}!")
+        s
