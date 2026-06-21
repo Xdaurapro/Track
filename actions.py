@@ -109,9 +109,14 @@ def do_play_card(bot, player, result_id):
         send_async(bot, chat.id, text="UNO!")
 
     if len(player.cards) == 0:
+        gm.end_game(chat, user)
+        send_async(bot, chat.id,
+                   text=__("✨"))
         send_async(bot, chat.id,
                    text=__("{name} won!", multi=game.translate)
                    .format(name=user.first_name))
+                           send_async(bot, chat.id,
+                   text=__("⚡️"))
 
         if us.stats:
             us.games_played += 1
